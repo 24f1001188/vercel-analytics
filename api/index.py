@@ -1,13 +1,9 @@
 # api/index.py
 import json
-from typing import List, Dict, Any
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
-
-app = FastAPI()
+from http.server import BaseHTTPRequestHandler
 
 # Telemetry data from q-vercel-latency.json (embedded)
-TELEMETRY_DATA: List[Dict[str, Any]] = [
+TELEMETRY_DATA = [
     {
         "region": "apac",
         "service": "recommendations",
@@ -262,7 +258,7 @@ TELEMETRY_DATA: List[Dict[str, Any]] = [
     },
 ]
 
-def compute_p95(values: List[float]) -> float:
+def compute_p95(values):
     """Compute 95th percentile using linear interpolation."""
     if not values:
         return 0.0
@@ -276,25 +272,40 @@ def compute_p95(values: List[float]) -> float:
     fraction = rank - lower
     return sorted_vals[lower] + fraction * (sorted_vals[upper] - sorted_vals[lower])
 
-@app.options("/api/analytics")
-async def options_analytics() -> Response:
-    """Handle CORS preflight for POST /api/analytics."""
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        },
-    )
+def handler(req, res):
+    # CORS headers for all responses
+    cors_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
 
-@app.post("/api/analytics")
-async def analytics_endpoint(request: Request) -> JSONResponse:
-    body = await request.json()
-    regions: List[str] = body.get("regions", [])
-    threshold_ms: float = body.get("threshold_ms", 180.0)
+    # Handle preflight OPTIONS
+    if req.method == "OPTIONS":
+        res.writeHead(204, cors_headers)
+        res.end()
+        return
 
-    result: Dict[str, Dict[str, Any]] = {}
+    # Only allow POST
+    if req.method != "POST":
+        res.writeHead(405, cors_headers)
+        res.end(json.dumps({"error": "Method not allowed"}))
+        return
+
+    # Read and parse JSON body
+    content_length = int(req.headers.get("Content-Length", 0))
+    body_bytes = req.rfile.read(content_length)
+    try:
+        body = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        res.writeHead(400, cors_headers)
+        res.end(json.dumps({"error": "Invalid JSON"}))
+        return
+
+    regions = body.get("regions", [])
+    threshold_ms = body.get("threshold_ms", 180.0)
+
+    result = {}
 
     for region in regions:
         records = [r for r in TELEMETRY_DATA if r.get("region") == region]
@@ -323,9 +334,5 @@ async def analytics_endpoint(request: Request) -> JSONResponse:
             "breaches": breaches,
         }
 
-    # Ensure CORS headers are present on the actual POST response too
-    response = JSONResponse(content=result)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    return response
+    res.writeHead(200, cors_headers)
+    res.end(json.dumps(result))
