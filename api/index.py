@@ -1,6 +1,28 @@
 # api/index.py
-import json
 from typing import Any, Dict, List
+
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+# CORS config similar to the person who got it right
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Expose-Headers": "Access-Control-Allow-Origin",
+}
+
+# Add FastAPI CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 TELEMETRY_DATA: List[Dict[str, Any]] = [
     {"region": "apac", "service": "recommendations", "latency_ms": 138.72, "uptime_pct": 97.117, "timestamp": 20250301},
@@ -54,64 +76,20 @@ def compute_p95(values):
     fraction = rank - lower
     return sorted_vals[lower] + fraction * (sorted_vals[upper] - sorted_vals[lower])
 
-async def app(scope, receive, send):
-    assert scope["type"] == "http"
+@app.options("/api/analytics")
+async def options_analytics() -> Response:
+    return Response(
+        status_code=204,
+        headers=CORS_HEADERS,
+    )
 
-    path = scope["path"]
-    method = scope["method"]
+@app.post("/api/analytics")
+async def analytics_endpoint(request: Request) -> JSONResponse:
+    body = await request.json()
+    regions = body.get("regions", [])
+    threshold_ms = body.get("threshold_ms", 180.0)
 
-    # CORS headers
-    cors_headers = [
-        (b"access-control-allow-origin", b"*"),
-        (b"access-control-allow-methods", b"POST, OPTIONS"),
-        (b"access-control-allow-headers", b"content-type"),
-    ]
-
-    # Handle OPTIONS preflight
-    if method == "OPTIONS":
-        await send({
-            "type": "http.response.start",
-            "status": 204,
-            "headers": cors_headers,
-        })
-        await send({"type": "http.response.body", "body": b""})
-        return
-
-    # Only allow POST to /api/analytics (or any path, since we route all to this file)
-    if method != "POST":
-        body = json.dumps({"error": "Method not allowed"}).encode("utf-8")
-        await send({
-            "type": "http.response.start",
-            "status": 405,
-            "headers": cors_headers,
-        })
-        await send({"type": "http.response.body", "body": body})
-        return
-
-    # Read request body
-    body = b""
-    while True:
-        message = await receive()
-        body += message.get("body", b"")
-        if not message.get("more_body", False):
-            break
-
-    try:
-        data = json.loads(body.decode("utf-8"))
-    except Exception:
-        body_out = json.dumps({"error": "Invalid JSON"}).encode("utf-8")
-        await send({
-            "type": "http.response.start",
-            "status": 400,
-            "headers": cors_headers,
-        })
-        await send({"type": "http.response.body", "body": body_out})
-        return
-
-    regions = data.get("regions", [])
-    threshold_ms = data.get("threshold_ms", 180.0)
-
-    result = {}
+    result: Dict[str, Dict[str, Any]] = {}
 
     for region in regions:
         records = [r for r in TELEMETRY_DATA if r.get("region") == region]
@@ -139,11 +117,5 @@ async def app(scope, receive, send):
             "breaches": breaches,
         }
 
-    response_body = json.dumps(result).encode("utf-8")
-
-    await send({
-        "type": "http.response.start",
-        "status": 200,
-        "headers": cors_headers,
-    })
-    await send({"type": "http.response.body", "body": response_body})
+    response = JSONResponse(content=result, headers=CORS_HEADERS)
+    return response
