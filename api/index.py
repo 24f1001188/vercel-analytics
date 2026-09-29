@@ -1,6 +1,5 @@
 # api/index.py
 import json
-from http.server import BaseHTTPRequestHandler
 
 # Telemetry data from q-vercel-latency.json (embedded)
 TELEMETRY_DATA = [
@@ -259,7 +258,6 @@ TELEMETRY_DATA = [
 ]
 
 def compute_p95(values):
-    """Compute 95th percentile using linear interpolation."""
     if not values:
         return 0.0
     sorted_vals = sorted(values)
