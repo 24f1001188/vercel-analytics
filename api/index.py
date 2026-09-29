@@ -117,5 +117,5 @@ async def analytics_endpoint(request: Request) -> JSONResponse:
             "breaches": breaches,
         }
 
-    response = JSONResponse(content=result, headers=CORS_HEADERS)
+    response = JSONResponse(content={"regions": result}, headers=CORS_HEADERS)
     return response
