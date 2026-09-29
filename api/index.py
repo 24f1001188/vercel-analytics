@@ -1,7 +1,8 @@
 # api/index.py
 import json
+from typing import Any, Dict, List
 
-TELEMETRY_DATA = [
+TELEMETRY_DATA: List[Dict[str, Any]] = [
     {"region": "apac", "service": "recommendations", "latency_ms": 138.72, "uptime_pct": 97.117, "timestamp": 20250301},
     {"region": "apac", "service": "support", "latency_ms": 131.92, "uptime_pct": 97.452, "timestamp": 20250302},
     {"region": "apac", "service": "payments", "latency_ms": 119.96, "uptime_pct": 97.311, "timestamp": 20250303},
@@ -53,34 +54,62 @@ def compute_p95(values):
     fraction = rank - lower
     return sorted_vals[lower] + fraction * (sorted_vals[upper] - sorted_vals[lower])
 
-def handler(req, res):
-    cors_headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-    }
+async def app(scope, receive, send):
+    assert scope["type"] == "http"
 
-    if req.method == "OPTIONS":
-        res.writeHead(204, cors_headers)
-        res.end()
+    path = scope["path"]
+    method = scope["method"]
+
+    # CORS headers
+    cors_headers = [
+        (b"access-control-allow-origin", b"*"),
+        (b"access-control-allow-methods", b"POST, OPTIONS"),
+        (b"access-control-allow-headers", b"content-type"),
+    ]
+
+    # Handle OPTIONS preflight
+    if method == "OPTIONS":
+        await send({
+            "type": "http.response.start",
+            "status": 204,
+            "headers": cors_headers,
+        })
+        await send({"type": "http.response.body", "body": b""})
         return
 
-    if req.method != "POST":
-        res.writeHead(405, cors_headers)
-        res.end(json.dumps({"error": "Method not allowed"}))
+    # Only allow POST to /api/analytics (or any path, since we route all to this file)
+    if method != "POST":
+        body = json.dumps({"error": "Method not allowed"}).encode("utf-8")
+        await send({
+            "type": "http.response.start",
+            "status": 405,
+            "headers": cors_headers,
+        })
+        await send({"type": "http.response.body", "body": body})
         return
 
-    content_length = int(req.headers.get("Content-Length", 0))
-    body_bytes = req.rfile.read(content_length)
+    # Read request body
+    body = b""
+    while True:
+        message = await receive()
+        body += message.get("body", b"")
+        if not message.get("more_body", False):
+            break
+
     try:
-        body = json.loads(body_bytes.decode("utf-8"))
+        data = json.loads(body.decode("utf-8"))
     except Exception:
-        res.writeHead(400, cors_headers)
-        res.end(json.dumps({"error": "Invalid JSON"}))
+        body_out = json.dumps({"error": "Invalid JSON"}).encode("utf-8")
+        await send({
+            "type": "http.response.start",
+            "status": 400,
+            "headers": cors_headers,
+        })
+        await send({"type": "http.response.body", "body": body_out})
         return
 
-    regions = body.get("regions", [])
-    threshold_ms = body.get("threshold_ms", 180.0)
+    regions = data.get("regions", [])
+    threshold_ms = data.get("threshold_ms", 180.0)
 
     result = {}
 
@@ -110,5 +139,11 @@ def handler(req, res):
             "breaches": breaches,
         }
 
-    res.writeHead(200, cors_headers)
-    res.end(json.dumps(result))
+    response_body = json.dumps(result).encode("utf-8")
+
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": cors_headers,
+    })
+    await send({"type": "http.response.body", "body": response_body})
