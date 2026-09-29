@@ -1,20 +1,10 @@
 # api/index.py
 import json
 from typing import List, Dict, Any
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
-
-# Enable CORS for all origins (required by the assignment)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Telemetry data from q-vercel-latency.json (embedded)
 TELEMETRY_DATA: List[Dict[str, Any]] = [
@@ -286,6 +276,18 @@ def compute_p95(values: List[float]) -> float:
     fraction = rank - lower
     return sorted_vals[lower] + fraction * (sorted_vals[upper] - sorted_vals[lower])
 
+@app.options("/api/analytics")
+async def options_analytics() -> Response:
+    """Handle CORS preflight for POST /api/analytics."""
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        },
+    )
+
 @app.post("/api/analytics")
 async def analytics_endpoint(request: Request) -> JSONResponse:
     body = await request.json()
@@ -295,11 +297,9 @@ async def analytics_endpoint(request: Request) -> JSONResponse:
     result: Dict[str, Dict[str, Any]] = {}
 
     for region in regions:
-        # Filter records for this region
         records = [r for r in TELEMETRY_DATA if r.get("region") == region]
 
         if not records:
-            # No data for this region; return zeros
             result[region] = {
                 "avg_latency": 0.0,
                 "p95_latency": 0.0,
@@ -323,4 +323,9 @@ async def analytics_endpoint(request: Request) -> JSONResponse:
             "breaches": breaches,
         }
 
-    return JSONResponse(content=result)
+    # Ensure CORS headers are present on the actual POST response too
+    response = JSONResponse(content=result)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
